@@ -1,0 +1,33 @@
+name:           timeout
+version:        0.1
+synopsis:       Monad transformer wrapping computations in a (ticklable) timeout
+license:        BSD3
+license-file:   LICENSE
+author:         Shane O'Brien
+maintainer:     shane@duairc.com
+stability:      Experimental
+category:       Control
+cabal-version:  >= 1.6
+homepage:       http://github.com/duairc/timeout
+bug-reports:    http://github.com/duairc/timeout/issues
+build-type:     Simple
+
+extra-source-files:
+  CONTRIBUTORS
+
+Library
+  hs-source-dirs:
+    src
+
+  exposed-modules:
+    Control.Monad.Interface.Timeout
+    Control.Monad.Trans.Timeout
+
+  build-depends:
+    base > 4.5 && < 5,
+    layers < 0.2,
+    stm > 2.3 && < 2.5,
+    transformers > 0.2 && < 0.4
+
+  ghc-options:
+    -Wall
