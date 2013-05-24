@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -12,6 +13,8 @@ module Control.Monad.Trans.Timeout
     , runTimeoutT
     )
 where
+
+#include <sys/time.h>
 
 -- base ----------------------------------------------------------------------
 import           Control.Applicative
@@ -39,17 +42,26 @@ import           Control.Monad
                      , ap
                      , guard
                      , liftM
+##if MIN_VERSION_base(4, 4, 0)
                      , liftM2
+##endif
                      )
 import           Control.Monad.Fix (MonadFix (mfix))
+##if MIN_VERSION_base(4, 4, 0)
 import           Control.Monad.Zip (MonadZip (mzip, mzipWith, munzip))
+##endif
 import           Data.Int (Int64)
 import           Data.Typeable (Typeable)
 import           Data.Unique (newUnique)
-import           Foreign.C.Types (CTime (CTime), CLong (CLong), CInt (CInt))
+import           Foreign.C.Types
+                     (  CInt
+##if MIN_VERSION_base(4, 5, 0)
+                         (CInt)
+##endif
+                     )
 import           Foreign.Marshal.Alloc (allocaBytes)
 import           Foreign.Ptr (Ptr, nullPtr, plusPtr)
-import           Foreign.Storable (peek, sizeOf)
+import           Foreign.Storable (peek)
 
 
 -- transformers --------------------------------------------------------------
@@ -66,9 +78,11 @@ import           Control.Monad.Layer
                          , restore
                          , layerControl
                          )
+#if __GLASGOW_HASKELL__ >= 702
                      , MonadTrans (type Outer, transInvmap)
                      , MonadTransFunctor (transMap)
                      , MonadTransControl (transControl)
+#endif
                      , MonadLift (lift)
                      , MonadLiftControl
                      , control
@@ -139,6 +153,7 @@ instance MonadFix m => MonadFix (TimeoutT m) where
     {-# INLINE mfix #-}
 
 
+##if MIN_VERSION_base(4, 4, 0)
 ------------------------------------------------------------------------------
 instance MonadZip m => MonadZip (TimeoutT m) where
     mzipWith f = liftM2 f
@@ -147,6 +162,7 @@ instance MonadZip m => MonadZip (TimeoutT m) where
     {-# INLINE mzip #-}
     munzip m = (liftM fst m, liftM snd m)
     {-# INLINE munzip #-}
+##endif
 
 
 ------------------------------------------------------------------------------
@@ -160,13 +176,13 @@ instance Monad m => MonadLayer (TimeoutT m) where
     type Inner (TimeoutT m) = m
     layer = TimeoutT . const
     {-# INLINE layer #-}
-    layerInvmap = transInvmap
+    layerInvmap (f, _) = layerMap f
     {-# INLINE layerInvmap #-}
 
 
 ------------------------------------------------------------------------------
 instance Monad m => MonadLayerFunctor (TimeoutT m) where
-    layerMap = transMap
+    layerMap f (TimeoutT m) = TimeoutT $ f . m
     {-# INLINE layerMap #-}
 
 
@@ -179,6 +195,7 @@ instance Monad m => MonadLayerControl (TimeoutT m) where
     {-# INLINE layerControl #-}
 
 
+#if __GLASGOW_HASKELL__ >= 702
 ------------------------------------------------------------------------------
 instance Monad m => MonadTrans (TimeoutT m) where
     type Outer (TimeoutT m) = TimeoutT
@@ -196,6 +213,7 @@ instance Monad m => MonadTransFunctor (TimeoutT m) where
 instance Monad m => MonadTransControl (TimeoutT m) where
     transControl f = TimeoutT $ \r -> f $ \(TimeoutT t) -> liftM L $ t r
     {-# INLINE transControl #-}
+#endif
 
 
 ------------------------------------------------------------------------------
@@ -245,14 +263,13 @@ instance Typeable a => Exception (Message a)
 
 ------------------------------------------------------------------------------
 getTime :: IO Int64
-getTime = allocaBytes (timeSize + longSize) $ \ptr -> do
+getTime = allocaBytes (#const sizeof (struct timeval)) $ \ptr -> do
     _ <- gettimeofday ptr nullPtr
-    (CTime secs) <- peek ptr
-    (CLong usecs) <- peek (ptr `plusPtr` timeSize)
-    return $ fromIntegral secs * 1000000 + fromIntegral usecs
-  where
-    timeSize = sizeOf (undefined :: CTime)
-    longSize = sizeOf (undefined :: CLong)
+    secs <- peek ptr
+    usecs <- peek $ ptr `plusPtr` (#const sizeof (time_t))
+    return
+        $ fromIntegral ((secs :: (#type time_t)) * 1000000)
+        + fromIntegral (usecs :: (#type suseconds_t))
 
 
 ------------------------------------------------------------------------------
