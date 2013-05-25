@@ -14,8 +14,6 @@ module Control.Monad.Trans.Timeout
     )
 where
 
-#include <sys/time.h>
-
 -- base ----------------------------------------------------------------------
 import           Control.Applicative
                      ( Applicative (pure, (<*>))
@@ -50,18 +48,12 @@ import           Control.Monad.Fix (MonadFix (mfix))
 ##if MIN_VERSION_base(4, 4, 0)
 import           Control.Monad.Zip (MonadZip (mzip, mzipWith, munzip))
 ##endif
-import           Data.Int (Int64)
+import           Data.Int (Int32, Int64)
 import           Data.Typeable (Typeable)
 import           Data.Unique (newUnique)
-import           Foreign.C.Types
-                     (  CInt
-##if MIN_VERSION_base(4, 5, 0)
-                         (CInt)
-##endif
-                     )
 import           Foreign.Marshal.Alloc (allocaBytes)
-import           Foreign.Ptr (Ptr, nullPtr, plusPtr)
-import           Foreign.Storable (peek)
+import           Foreign.Ptr (Ptr)
+import           Foreign.Storable (peekByteOff)
 
 
 -- transformers --------------------------------------------------------------
@@ -261,16 +253,35 @@ instance Show (Message a) where show _ =  "<<message>>"
 instance Typeable a => Exception (Message a)
 
 
+#ifndef mingw32_os
+#include <time.h>
+
+
 ------------------------------------------------------------------------------
 getTime :: IO Int64
-getTime = allocaBytes (#const sizeof (struct timeval)) $ \ptr -> do
-    _ <- gettimeofday ptr nullPtr
-    secs <- peek ptr
-    usecs <- peek $ ptr `plusPtr` (#const sizeof (time_t))
+getTime = allocaBytes (#const sizeof (struct timespec)) $ \ptr -> do
+    clock_gettime (#const CLOCK_MONOTONIC) ptr
+    secs <- (#peek struct timespec, tv_sec) ptr
+    nsecs <- (#peek struct timespec, tv_nsec) ptr
     return
         $ fromIntegral ((secs :: (#type time_t)) * 1000000)
-        + fromIntegral (usecs :: (#type suseconds_t))
+        + fromIntegral ((nsecs :: (#type long)) `div` 1000)
 
 
 ------------------------------------------------------------------------------
-foreign import ccall unsafe gettimeofday :: Ptr a -> Ptr a -> IO CInt
+foreign import ccall unsafe "clock_gettime"
+    clock_gettime :: (#type clockid_t) -> Ptr a -> IO ()
+#else
+#define _WIN32_WINNT as 0x0600
+#include <Windows.h>
+
+
+------------------------------------------------------------------------------
+getTime :: IO Int64
+getTime = fmap (* 1000) getTickCount64
+
+
+------------------------------------------------------------------------------
+foreign import ccall unsafe "GetTickCount64"
+    getTickCount64 :: IO Word64
+#endif
