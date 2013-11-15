@@ -50,42 +50,44 @@ import           Control.Monad.Zip (MonadZip (mzip, mzipWith, munzip))
 ##endif
 import           Data.Int (Int32, Int64)
 import           Data.Typeable (Typeable)
-import           Data.Unique (newUnique)
+import           Data.Unique (Unique, newUnique)
 import           Foreign.Marshal.Alloc (allocaBytes)
 import           Foreign.Ptr (Ptr)
 import           Foreign.Storable (peekByteOff)
 
 
 -- transformers --------------------------------------------------------------
-import qualified Control.Monad.Trans.Class as T (MonadTrans (lift))
 import           Control.Monad.IO.Class (MonadIO (liftIO))
+##if __GLASGOW_HASKELL__ >= 704
+import           Data.Functor.Identity (Identity (Identity))
+##endif
 
 
 -- layers --------------------------------------------------------------------
-import           Control.Monad.Layer
-                     ( MonadLayer (type Inner, layer, layerInvmap)
-                     , MonadLayerFunctor (layerMap)
-                     , MonadLayerControl
-                         ( type LayerState
-                         , restore
-                         , layerControl
-                         )
-#if __GLASGOW_HASKELL__ >= 702
-                     , MonadTrans (type Outer, transInvmap)
-                     , MonadTransFunctor (transMap)
-                     , MonadTransControl (transControl)
-#endif
-                     , MonadLift (lift)
-                     , MonadLiftControl
+import           Control.Monad.Lift
+                     ( MonadTrans
+                     , lift
+                     , MInvariant
+                     , hoistiso
+                     , MFunctor
+                     , hoist
+                     , MonadTransControl
+                     , LayerResult
+                     , LayerState
+                     , suspend
+                     , resume
+                     , capture
+                     , extract
                      , control
-                     , controlLayer
+                     , MonadInner
+                     , liftI
+                     , MonadInnerControl
+                     , controlI
                      )
 
 
 -- timeout -------------------------------------------------------------------
-import           Control.Monad.Interface.Timeout
-                     ( MonadTimeout (resume, tickle, pause)
-                     )
+import           Monad.Timeout (MonadTimeout (unpause, tickle, pause))
 
 
 ------------------------------------------------------------------------------
@@ -93,141 +95,126 @@ newtype TimeoutT m a = TimeoutT (TMVar Int64 -> m a)
 
 
 ------------------------------------------------------------------------------
-instance T.MonadTrans TimeoutT where
-    lift = layer
-    {-# INLINE lift #-}
+instance MonadTrans TimeoutT where
+    lift = TimeoutT . const
+
+
+------------------------------------------------------------------------------
+instance MInvariant TimeoutT where
+    hoistiso f _ = hoist f
+
+
+------------------------------------------------------------------------------
+instance MFunctor TimeoutT where
+    hoist f (TimeoutT m) = TimeoutT $ f . m
+
+
+##if __GLASGOW_HASKELL__ >= 704
+------------------------------------------------------------------------------
+type instance LayerResult TimeoutT = Identity
+
+
+------------------------------------------------------------------------------
+type instance LayerState TimeoutT m = TMVar Int64
+
+
+------------------------------------------------------------------------------
+instance MonadTransControl TimeoutT where
+    suspend (TimeoutT m) t = liftM (\a -> (Identity a, t)) (m t)
+    resume (Identity a, _) = TimeoutT $ \_ -> return a
+    capture = TimeoutT return
+    extract _ (Identity a) = Just a
+##else
+------------------------------------------------------------------------------
+newtype instance LayerResult TimeoutT a = R a
+
+
+------------------------------------------------------------------------------
+newtype instance LayerState TimeoutT m = S (TMVar Int64)
+
+
+------------------------------------------------------------------------------
+instance MonadTransControl TimeoutT where
+    suspend (TimeoutT m) s@(S t) = liftM (\a -> (R a, s)) (m t)
+    resume (R a, _) = TimeoutT . const $ return a
+    capture = TimeoutT $ return . S
+    extract _ (R a) = Just a
+##endif
 
 
 ------------------------------------------------------------------------------
 instance Monad m => Functor (TimeoutT m) where
     fmap = liftM
-    {-# INLINE fmap #-}
 
 
 ------------------------------------------------------------------------------
 instance Monad m => Applicative (TimeoutT m) where
     pure = return
-    {-# INLINE pure #-}
     (<*>) = ap
-    {-# INLINE (<*>) #-}
 
 
 ------------------------------------------------------------------------------
 instance MonadPlus m => Alternative (TimeoutT m) where
     empty = mzero
-    {-# INLINE empty #-}
     (<|>) = mplus
-    {-# INLINE (<|>) #-}
 
 
 ------------------------------------------------------------------------------
 instance Monad m => Monad (TimeoutT m) where
-    return = layer . return
-    {-# INLINE return #-}
+    return = lift . return
+    {-# INLINABLE return #-}
     TimeoutT m >>= f = TimeoutT $ \r -> m r >>= \a ->
         let TimeoutT m' = f a in m' r
-    {-# INLINE (>>=) #-}
-    fail = layer . fail
-    {-# INLINE fail #-}
+    {-# INLINABLE (>>=) #-}
+    fail = lift . fail
+    {-# INLINABLE fail #-}
 
 
 ------------------------------------------------------------------------------
 instance MonadPlus m => MonadPlus (TimeoutT m) where
-    mzero = layer mzero
-    {-# INLINE mzero #-}
-    mplus a b = controlLayer (\run -> mplus (run a) (run b))
-    {-# INLINE mplus #-}
+    mzero = lift mzero
+    mplus a b = control (\peel -> mplus (peel a) (peel b))
 
 
 ------------------------------------------------------------------------------
 instance MonadFix m => MonadFix (TimeoutT m) where
-    mfix f = controlLayer (\run -> mfix (\a -> run (restore a >>= f)))
-    {-# INLINE mfix #-}
+    mfix f = control (\peel -> mfix (\a -> peel (resume a >>= f)))
 
 
 ##if MIN_VERSION_base(4, 4, 0)
 ------------------------------------------------------------------------------
 instance MonadZip m => MonadZip (TimeoutT m) where
     mzipWith f = liftM2 f
-    {-# INLINE mzipWith #-}
     mzip = liftM2 (,)
-    {-# INLINE mzip #-}
     munzip m = (liftM fst m, liftM snd m)
-    {-# INLINE munzip #-}
 ##endif
 
 
 ------------------------------------------------------------------------------
 instance MonadIO m => MonadIO (TimeoutT m) where
-    liftIO = layer . liftIO
-    {-# INLINE liftIO #-}
+    liftIO = lift . liftIO
 
 
 ------------------------------------------------------------------------------
-instance Monad m => MonadLayer (TimeoutT m) where
-    type Inner (TimeoutT m) = m
-    layer = TimeoutT . const
-    {-# INLINE layer #-}
-    layerInvmap (f, _) = layerMap f
-    {-# INLINE layerInvmap #-}
+instance MonadInner IO m => MonadTimeout (TimeoutT m) where
+    unpause = tickle
 
-
-------------------------------------------------------------------------------
-instance Monad m => MonadLayerFunctor (TimeoutT m) where
-    layerMap f (TimeoutT m) = TimeoutT $ f . m
-    {-# INLINE layerMap #-}
-
-
-------------------------------------------------------------------------------
-instance Monad m => MonadLayerControl (TimeoutT m) where
-    newtype LayerState (TimeoutT m) a = L {unL :: a}
-    restore = TimeoutT . const . return . unL
-    {-# INLINE restore #-}
-    layerControl f = TimeoutT $ \r -> f $ \(TimeoutT t) -> liftM L $ t r
-    {-# INLINE layerControl #-}
-
-
-#if __GLASGOW_HASKELL__ >= 702
-------------------------------------------------------------------------------
-instance Monad m => MonadTrans (TimeoutT m) where
-    type Outer (TimeoutT m) = TimeoutT
-    transInvmap (f, _) = transMap f
-    {-# INLINE transInvmap #-}
-
-
-------------------------------------------------------------------------------
-instance Monad m => MonadTransFunctor (TimeoutT m) where
-    transMap f (TimeoutT m) = TimeoutT $ f . m
-    {-# INLINE transMap #-}
-
-
-------------------------------------------------------------------------------
-instance Monad m => MonadTransControl (TimeoutT m) where
-    transControl f = TimeoutT $ \r -> f $ \(TimeoutT t) -> liftM L $ t r
-    {-# INLINE transControl #-}
-#endif
-
-
-------------------------------------------------------------------------------
-instance MonadLift IO m => MonadTimeout (TimeoutT m) where
-    resume = tickle
-
-    tickle = TimeoutT $ \r -> lift $ do
+    tickle = TimeoutT $ \r -> liftI $ do
         time <- getTime
         atomically $ tryTakeTMVar r >>= putTMVar r . maybe time (max time)
 
-    pause = TimeoutT $ \r -> lift $ do
+    pause = TimeoutT $ \r -> liftI $ do
         _ <- atomically $ tryTakeTMVar r
         return ()
 
 
 ------------------------------------------------------------------------------
-runTimeoutT :: MonadLiftControl IO m => Int64 -> TimeoutT m a -> m (Maybe a)
-runTimeoutT n (TimeoutT m) = control $ \run -> do
+runTimeoutT :: MonadInnerControl IO m => Int64 -> TimeoutT m a -> m (Maybe a)
+runTimeoutT n (TimeoutT m) = controlI $ \peel -> do
     pid <- myThreadId
     tickler <- getTime >>= atomically . newTMVar
     e <- liftM Message newUnique
-    handleJust (guard . (== e)) (\_ -> run $ return Nothing) (bracket
+    handleJust (guard . (== e)) (\_ -> peel $ return Nothing) (bracket
         (forkIO $ do
             let go = do
                 kill <- liftM (+n) . atomically $ readTMVar tickler
@@ -238,7 +225,7 @@ runTimeoutT n (TimeoutT m) = control $ \run -> do
                    else throwTo pid e
             go)
         killThread
-        (\_ -> run . liftM Just $ m tickler))
+        (\_ -> peel . liftM Just $ m tickler))
   where
     threadDelay' t = do
         let t' = t - fromIntegral (maxBound :: Int)
@@ -248,9 +235,9 @@ runTimeoutT n (TimeoutT m) = control $ \run -> do
 
 
 ------------------------------------------------------------------------------
-newtype Message a = Message a deriving (Eq, Typeable)
-instance Show (Message a) where show _ =  "<<message>>"
-instance Typeable a => Exception (Message a)
+newtype Message = Message Unique deriving (Eq, Typeable)
+instance Show Message where show _ =  "<<message>>"
+instance Exception Message
 
 
 #ifndef mingw32_os
