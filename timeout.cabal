@@ -19,6 +19,9 @@ Library
   hs-source-dirs:
     src
 
+  include-dirs:
+    include
+
   exposed-modules:
     Monad.Timeout
     Control.Monad.Trans.Timeout
@@ -28,7 +31,7 @@ Library
     layers >= 1.0 && < 1.1,
     mmorph >= 1.0 && < 1.1,
     stm >= 2.2.0.1 && < 2.5,
-    transformers >= 0.2 && < 0.4
+    transformers >= 0.2 && < 0.6
 
   ghc-options:
     -Wall
@@ -38,3 +41,6 @@ Library
 
   if impl(ghc >= 7.4)
     cpp-options: -DLANGUAGE_ConstraintKinds
+
+  if impl(ghc >= 7.10)
+    cpp-options: -DOverlapPragma -DOverlappingInstances=NoImplicitParams

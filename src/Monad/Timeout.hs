@@ -3,9 +3,12 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverlappingInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
+
 #ifdef LANGUAGE_ConstraintKinds
 {-# LANGUAGE ConstraintKinds #-}
 #endif
+
+#include "overlap.h"
 
 module Monad.Timeout
     ( MonadTimeout (tickle, pause, unpause)
@@ -53,7 +56,9 @@ instance MonadTimeout (f (g m)) => MonadTimeout (ComposeT f g m) where
 
 
 ------------------------------------------------------------------------------
-instance (MonadTop t m, MonadTimeout m) => MonadTimeout (t m) where
+instance __OVERLAPPABLE__ (MonadTop t m, MonadTimeout m, Monad (t m)) =>
+    MonadTimeout (t m)
+  where
     tickle = liftT tickle
     pause = liftT pause
     unpause = liftT unpause
