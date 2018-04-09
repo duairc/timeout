@@ -31,16 +31,13 @@ Library
     layers >= 1.0 && < 1.1,
     mmorph >= 1.0 && < 1.1,
     stm >= 2.2.0.1 && < 2.5,
-    transformers >= 0.2 && < 0.6
+    transformers >= 0.2.1 && < 0.6
 
   ghc-options:
     -Wall
 
   if impl(ghc < 7)
     cpp-options: -DINLINABLE=INLINE
-
-  if impl(ghc >= 7.4)
-    cpp-options: -DLANGUAGE_ConstraintKinds
 
   if impl(ghc >= 7.10)
     cpp-options: -DOverlapPragma -DOverlappingInstances=NoImplicitParams

@@ -4,10 +4,6 @@
 {-# LANGUAGE OverlappingInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-#ifdef LANGUAGE_ConstraintKinds
-{-# LANGUAGE ConstraintKinds #-}
-#endif
-
 #include "overlap.h"
 
 module Monad.Timeout
@@ -15,16 +11,16 @@ module Monad.Timeout
     )
 where
 
+-- base ----------------------------------------------------------------------
+import           Data.Functor.Product (Product (Pair))
+
+
 -- mmorph --------------------------------------------------------------------
 import           Control.Monad.Trans.Compose (ComposeT (ComposeT))
 
 
 -- layers --------------------------------------------------------------------
-import           Control.Monad.Lift.Top (MonadTop, liftT)
-
-
--- transformers --------------------------------------------------------------
-import           Data.Functor.Product (Product (Pair))
+import           Control.Monad.Lift (MonadTrans, lift)
 
 
 ------------------------------------------------------------------------------
@@ -56,10 +52,9 @@ instance MonadTimeout (f (g m)) => MonadTimeout (ComposeT f g m) where
 
 
 ------------------------------------------------------------------------------
-instance __OVERLAPPABLE__ (MonadTop t m, MonadTimeout m, Monad (t m)) =>
+instance __OVERLAPPABLE__ (MonadTrans t, MonadTimeout m, Monad (t m)) =>
     MonadTimeout (t m)
   where
-    tickle = liftT tickle
-    pause = liftT pause
-    unpause = liftT unpause
- 
+    tickle = lift tickle
+    pause = lift pause
+    unpause = lift unpause

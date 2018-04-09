@@ -45,22 +45,17 @@ import           Control.Monad
 ##endif
                      )
 import           Control.Monad.Fix (MonadFix (mfix))
+import           Control.Monad.IO.Class (MonadIO (liftIO))
 ##if MIN_VERSION_base(4, 4, 0)
 import           Control.Monad.Zip (MonadZip (mzip, mzipWith, munzip))
 ##endif
+import           Data.Functor.Identity (Identity (Identity))
 import           Data.Int (Int32, Int64)
 import           Data.Typeable (Typeable)
 import           Data.Unique (Unique, newUnique)
 import           Foreign.Marshal.Alloc (allocaBytes)
 import           Foreign.Ptr (Ptr)
 import           Foreign.Storable (peekByteOff)
-
-
--- transformers --------------------------------------------------------------
-import           Control.Monad.IO.Class (MonadIO (liftIO))
-##if __GLASGOW_HASKELL__ >= 704
-import           Data.Functor.Identity (Identity (Identity))
-##endif
 
 
 -- layers --------------------------------------------------------------------
@@ -109,37 +104,17 @@ instance MFunctor TimeoutT where
     hoist f (TimeoutT m) = TimeoutT $ f . m
 
 
-##if __GLASGOW_HASKELL__ >= 704
-------------------------------------------------------------------------------
-type instance LayerResult TimeoutT = Identity
-
-
-------------------------------------------------------------------------------
-type instance LayerState TimeoutT m = TMVar Int64
-
-
 ------------------------------------------------------------------------------
 instance MonadTransControl TimeoutT where
     suspend (TimeoutT m) t = liftM (\a -> (Identity a, t)) (m t)
     resume (Identity a, _) = TimeoutT $ \_ -> return a
     capture = TimeoutT return
-    extract _ (Identity a) = Just a
-##else
-------------------------------------------------------------------------------
-newtype instance LayerResult TimeoutT a = R a
+    extract _ (Identity a) = Right a
 
 
 ------------------------------------------------------------------------------
-newtype instance LayerState TimeoutT m = S (TMVar Int64)
-
-
-------------------------------------------------------------------------------
-instance MonadTransControl TimeoutT where
-    suspend (TimeoutT m) s@(S t) = liftM (\a -> (R a, s)) (m t)
-    resume (R a, _) = TimeoutT . const $ return a
-    capture = TimeoutT $ return . S
-    extract _ (R a) = Just a
-##endif
+type instance LayerResult TimeoutT = Identity
+type instance LayerState TimeoutT = TMVar Int64
 
 
 ------------------------------------------------------------------------------
@@ -187,9 +162,9 @@ instance MonadZip m => MonadZip (TimeoutT m) where
     mzipWith f = liftM2 f
     mzip = liftM2 (,)
     munzip m = (liftM fst m, liftM snd m)
+
+
 ##endif
-
-
 ------------------------------------------------------------------------------
 instance MonadIO m => MonadIO (TimeoutT m) where
     liftIO = lift . liftIO
